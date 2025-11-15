@@ -1,0 +1,177 @@
+/**************************************************
+ *  Proyecto: Sensor Agua + HC-SR04 + Blynk
+ *  Placa: ESP8266 (NodeMCU / Wemos D1 mini)
+ **************************************************/
+
+#define BLYNK_TEMPLATE_ID   "TMPL2U1L8kzH1"
+#define BLYNK_TEMPLATE_NAME "Sensor Agua"
+#define BLYNK_AUTH_TOKEN    "8aRmtwETCbSXzPiKviy-UnFWEekJI3aM"
+
+#define BLYNK_PRINT Serial
+
+#include <ESP8266WiFi.h>
+#include <BlynkSimpleEsp8266.h>
+#include <BlynkTimer.h>
+
+// ----- WiFi -----
+char ssid[] = "Casa-paul3";
+char pass[] = "Ener02015";
+
+// ----- Pines -----
+// Sensor de agua
+#define WATER_SIGNAL_PIN  A0
+#define WATER_POWER_PIN   D1
+
+// LED indicador
+#define LED_PIN           D2
+
+// Ultrasonico HC-SR04
+#define TRIG_PIN          D6
+#define ECHO_PIN          D7
+
+// Umbral del sensor de agua
+int threshold = 300;
+
+BlynkTimer timer;
+
+// ----- CONFIG TANQUE -----
+const int DIST_LLENO = 3;    // cm (sensor casi tocando el agua)
+const int DIST_VACIO = 16;   // cm (tanque vacío)
+
+// -------- FUNCIONES --------
+
+long readDistanceCM() {
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000);
+  if (duration == 0) return -1;
+  return duration / 58;
+}
+
+int getNivelPorcentaje(long d) {
+  if (d < 0) return 0;
+
+  if (d < DIST_LLENO) d = DIST_LLENO;
+  if (d > DIST_VACIO) d = DIST_VACIO;
+
+  long rango = DIST_VACIO - DIST_LLENO;
+  long nivel_cm = DIST_VACIO - d;
+
+  return (nivel_cm * 100) / rango;
+}
+
+long getNivelCM(long d) {
+  if (d < DIST_LLENO) d = DIST_LLENO;
+  if (d > DIST_VACIO) d = DIST_VACIO;
+  return DIST_VACIO - d;
+}
+
+// -------- ENVÍO DE DATOS --------
+
+void sendSensorData() {
+  // --- SENSOR DE AGUA ---
+  digitalWrite(WATER_POWER_PIN, HIGH);
+  delay(10);
+
+  int waterValue = analogRead(WATER_SIGNAL_PIN);
+  bool waterDetected = (waterValue > threshold);
+
+  digitalWrite(LED_PIN, waterDetected ? HIGH : LOW);
+
+  Serial.print("Agua -> ");
+  Serial.print(waterValue);
+  Serial.print("  | Estado: ");
+  Serial.println(waterDetected ? "DETECTADA" : "NO detectada");
+
+  Blynk.virtualWrite(V1, waterDetected ? 1 : 0);
+
+  digitalWrite(WATER_POWER_PIN, LOW);
+
+  // --- ULTRASONICO ---
+  long distance = readDistanceCM();
+  Serial.print("Distancia HC-SR04: ");
+  Serial.print(distance);
+  Serial.println(" cm");
+
+  // Enviar valor original
+  Blynk.virtualWrite(V2, distance);
+
+  // Nivel invertido (cm)
+  long nivel_cm = getNivelCM(distance);
+  Serial.print("Nivel invertido: ");
+  Serial.print(nivel_cm);
+  Serial.println(" cm");
+  Blynk.virtualWrite(V3, nivel_cm);
+
+  // Porcentaje tanque
+  int porcentaje = getNivelPorcentaje(distance);
+  Serial.print("Porcentaje: ");
+  Serial.print(porcentaje);
+  Serial.println(" %");
+  Blynk.virtualWrite(V4, porcentaje);
+}
+
+// -------- SETUP --------
+
+void setup() {
+  Serial.begin(115200);
+  delay(2000);
+
+  Serial.println();
+  Serial.println("====================================");
+  Serial.println("   Iniciando ESP8266 - Revitank IoT");
+  Serial.println("====================================");
+
+  pinMode(WATER_POWER_PIN, OUTPUT);
+  digitalWrite(WATER_POWER_PIN, LOW);
+
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+
+  // WiFi manual
+  Serial.print("Conectando a WiFi: ");
+  Serial.println(ssid);
+  WiFi.begin(ssid, pass);
+
+  int intentos = 0;
+  while (WiFi.status() != WL_CONNECTED && intentos < 40) {
+    delay(500);
+    Serial.print(".");
+    intentos++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWiFi CONECTADO");
+    Serial.print("IP: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("\nERROR: No se pudo conectar a WiFi");
+  }
+
+  Serial.println("Configurando Blynk...");
+  Blynk.config(BLYNK_AUTH_TOKEN);
+
+  Serial.print("Conectando a Blynk...");
+  if (Blynk.connect(10000)) {
+    Serial.println("\nBlynk CONECTADO");
+  } else {
+    Serial.println("\nERROR: No se pudo conectar a Blynk");
+  }
+
+  // Timer 1s
+  timer.setInterval(1000L, sendSensorData);
+}
+
+// -------- LOOP --------
+
+void loop() {
+  Blynk.run();
+  timer.run();
+}
